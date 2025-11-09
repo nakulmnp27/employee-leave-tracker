@@ -7,7 +7,6 @@ public class Main {
 
     public static void main(String[] args) {
         Database.init();
-        seed();
 
         while (true) {
             System.out.println("\n--- Leave Management System ---");
@@ -23,16 +22,6 @@ public class Main {
                 System.out.println("Exiting system...");
                 break;
             }
-        }
-    }
-
-    static void seed() {
-        try (Connection c = Database.get(); Statement s = c.createStatement()) {
-            s.executeUpdate("INSERT OR IGNORE INTO departments(dept_id,name) VALUES (1,'R&D'),(2,'Development'),(3,'Testing')");
-            s.executeUpdate("INSERT OR IGNORE INTO employees(emp_id,name,dept_id,role,password) VALUES (100,'Nakul',1,'EMP','1234'),(200,'Manager1',2,'HR','hr123')");
-            s.executeUpdate("INSERT OR IGNORE INTO leave_balances(emp_id,casual,sick,earned,wfh) VALUES (100,5,5,10,10)");
-        } catch (Exception e) {
-            System.out.println(e.getMessage());
         }
     }
 
@@ -55,12 +44,8 @@ public class Main {
                 if (dbPass.equals(pass)) {
                     System.out.println("\nWelcome, " + name);
                     employeeMenu(empId);
-                } else {
-                    System.out.println("Invalid password.");
-                }
-            } else {
-                System.out.println("Invalid employee ID.");
-            }
+                } else System.out.println("Invalid password.");
+            } else System.out.println("Invalid employee ID.");
         } catch (Exception e) {
             System.out.println(e.getMessage());
         }
@@ -93,30 +78,24 @@ public class Main {
             while (true) {
                 System.out.print("Type (CASUAL/SICK/EARNED/WFH): ");
                 String type = sc.nextLine().trim().toUpperCase();
-
                 System.out.print("Start (YYYY-MM-DD): ");
                 LocalDate start = LocalDate.parse(sc.nextLine().trim());
                 System.out.print("End (YYYY-MM-DD): ");
                 LocalDate end = LocalDate.parse(sc.nextLine().trim());
-
                 LocalDate today = LocalDate.now();
 
                 if (start.isBefore(today)) {
                     System.out.println("Invalid date! Leave cannot start before today's date.");
                     continue;
                 }
-
                 if (end.isBefore(start)) {
-                    System.out.println("Invalid date range! End date must be after or same as the start date.");
+                    System.out.println("End date must be after or same as start date.");
                     continue;
                 }
 
                 long days = java.time.temporal.ChronoUnit.DAYS.between(start, end) + 1;
-                System.out.println("Leave duration: " + days + (days == 1 ? " day" : " days"));
-
-                // Check balance
                 if (!hasEnoughBalance(c, empId, type, days)) {
-                    System.out.println("Insufficient leave balance for " + type + " leave.");
+                    System.out.println("Insufficient balance.");
                     continue;
                 }
 
@@ -127,8 +106,8 @@ public class Main {
                         "INSERT INTO leaves(emp_id,type,start_date,end_date,status,reason) VALUES (?,?,?,?,?,?)");
                 ps.setInt(1, empId);
                 ps.setString(2, type);
-                ps.setString(3, start.toString());
-                ps.setString(4, end.toString());
+                ps.setDate(3, Date.valueOf(start));
+                ps.setDate(4, Date.valueOf(end));
                 ps.setString(5, "PENDING");
                 ps.setString(6, reason);
                 ps.executeUpdate();
@@ -149,13 +128,10 @@ public class Main {
                 case "EARNED" -> "earned";
                 default -> "wfh";
             };
-
             PreparedStatement ps = c.prepareStatement("SELECT " + col + " FROM leave_balances WHERE emp_id=?");
             ps.setInt(1, empId);
             ResultSet rs = ps.executeQuery();
-            if (rs.next()) {
-                return rs.getInt(1) >= days;
-            }
+            if (rs.next()) return rs.getInt(1) >= days;
         } catch (Exception e) {
             System.out.println(e.getMessage());
         }
@@ -171,7 +147,7 @@ public class Main {
             boolean any = false;
             while (rs.next()) {
                 any = true;
-                System.out.println(rs.getString("date") + " - " + rs.getString("message"));
+                System.out.println(rs.getDate("date") + " - " + rs.getString("message"));
             }
             if (!any) System.out.println("No notifications yet.");
         } catch (Exception e) {
@@ -204,7 +180,7 @@ public class Main {
             while (rs.next()) {
                 any = true;
                 System.out.printf("%s | %s to %s | %s | %s%n",
-                        rs.getString("type"), rs.getString("start_date"), rs.getString("end_date"),
+                        rs.getString("type"), rs.getDate("start_date"), rs.getDate("end_date"),
                         rs.getString("status"), rs.getString("manager_remark"));
             }
             if (!any) System.out.println("No leave history found.");
@@ -249,10 +225,7 @@ public class Main {
             if (ch.equals("1")) decide();
             else if (ch.equals("2")) addEmployee();
             else if (ch.equals("3")) removeEmployee();
-            else if (ch.equals("4")) {
-                System.out.println("Logging out...");
-                break;
-            }
+            else if (ch.equals("4")) break;
         }
     }
 
@@ -266,7 +239,7 @@ public class Main {
                     any = true;
                     System.out.printf("%d | Emp %d | %s | %s to %s%n",
                             rs.getInt("leave_id"), rs.getInt("emp_id"),
-                            rs.getString("type"), rs.getString("start_date"), rs.getString("end_date"));
+                            rs.getString("type"), rs.getDate("start_date"), rs.getDate("end_date"));
                 }
                 if (!any) {
                     System.out.println("No pending requests.");
@@ -295,7 +268,7 @@ public class Main {
             System.out.print("\nDecision (APPROVED/REJECTED): ");
             String decision = sc.nextLine().trim().toUpperCase();
             if (!decision.equals("APPROVED") && !decision.equals("REJECTED")) {
-                System.out.println("Invalid input. Please enter only APPROVED or REJECTED.");
+                System.out.println("Invalid input.");
                 return;
             }
 
@@ -316,8 +289,8 @@ public class Main {
                     ResultSet r2 = ps2.executeQuery();
                     if (r2.next()) {
                         String type = r2.getString("type");
-                        LocalDate s = LocalDate.parse(r2.getString("start_date"));
-                        LocalDate e = LocalDate.parse(r2.getString("end_date"));
+                        LocalDate s = r2.getDate("start_date").toLocalDate();
+                        LocalDate e = r2.getDate("end_date").toLocalDate();
                         long days = java.time.temporal.ChronoUnit.DAYS.between(s, e) + 1;
                         String col = switch (type) {
                             case "CASUAL" -> "casual";
@@ -334,7 +307,7 @@ public class Main {
                 }
             }
 
-            try (PreparedStatement notif = c.prepareStatement("INSERT INTO notifications(emp_id,message,date) VALUES (?,?,date('now'))")) {
+            try (PreparedStatement notif = c.prepareStatement("INSERT INTO notifications(emp_id,message,date) VALUES (?,?,CURRENT_DATE)")) {
                 notif.setInt(1, empId);
                 notif.setString(2, "Leave " + decision.toLowerCase());
                 notif.executeUpdate();
@@ -399,18 +372,6 @@ public class Main {
         try (Connection c = Database.get()) {
             System.out.print("Enter Employee ID to remove: ");
             int id = Integer.parseInt(sc.nextLine().trim());
-
-            PreparedStatement delLeaves = c.prepareStatement("DELETE FROM leaves WHERE emp_id=?");
-            delLeaves.setInt(1, id);
-            delLeaves.executeUpdate();
-
-            PreparedStatement delNotif = c.prepareStatement("DELETE FROM notifications WHERE emp_id=?");
-            delNotif.setInt(1, id);
-            delNotif.executeUpdate();
-
-            PreparedStatement delBal = c.prepareStatement("DELETE FROM leave_balances WHERE emp_id=?");
-            delBal.setInt(1, id);
-            delBal.executeUpdate();
 
             PreparedStatement delEmp = c.prepareStatement("DELETE FROM employees WHERE emp_id=? AND role='EMP'");
             delEmp.setInt(1, id);
