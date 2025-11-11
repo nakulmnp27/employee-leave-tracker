@@ -3,6 +3,15 @@
 
 ---
 
+## 📑 Table of Contents
+- [Introduction](#-introduction)
+- [System Design](#-system-design)
+- [Architecture Diagram](#architecture-diagram)
+- [Technology Stack Used](#-technology-stack-used)
+- [Key Challenges Faced and Solutions](#️-key-challenges-faced-and-solutions)
+- [Possible Future Enhancements](#-possible-future-enhancements)
+
+
 ## 📝 Introduction
 
 The **Employee Leave Management System (ELMS)** is a **Java-based console application** designed to automate and simplify the process of managing employee leaves within an organization. It provides separate access for employees and HR personnel, enabling secure login, streamlined leave applications, real-time approvals, and automated notifications through an integrated **MySQL database**.
@@ -58,3 +67,6 @@ The application also features an **automated notification system** that improves
 ---
 
 <p align="center">© 2025 Employee Leave Management System | Developed by <b>Nakul Prasath M</b></p>
+
+
+
