@@ -6,11 +6,13 @@
 ## 📑 Table of Contents
 - [Introduction](#-introduction)
 - [System Design](#-system-design)
-- [Architecture Diagram](#architecture-diagram)
+- [Architecture Diagram](#-architecture-diagram)
 - [Technology Stack Used](#-technology-stack-used)
 - [Key Challenges Faced and Solutions](#️-key-challenges-faced-and-solutions)
 - [Possible Future Enhancements](#-possible-future-enhancements)
+- [Author](#-author)
 
+---
 
 ## 📝 Introduction
 
@@ -27,6 +29,8 @@ The **HR module** allows administrators to efficiently manage all leave requests
 The application also features an **automated notification system** that improves communication between employees and HR. Notifications are generated automatically for events such as upcoming approved leaves and low leave balances. The backend database (**leave_tracker**) initializes automatically during the first run, creating essential tables such as **departments, employees, leave_balances, leaves,** and **notifications** without any manual setup. With its structured flow, automation, and reliability, the ELMS provides an efficient, paperless, and accurate solution for managing employee leave processes within an organization.
 
 ---
+
+## 🏗️ Architecture Diagram
 
 <p align="center">
   <img width="700" src="https://github.com/user-attachments/assets/0a954484-d5d1-4366-b93b-56d8b239f8f0" alt="System Architecture Diagram" />
@@ -67,6 +71,3 @@ The application also features an **automated notification system** that improves
 ---
 
 <p align="center">© 2025 Employee Leave Management System | Developed by <b>Nakul Prasath M</b></p>
-
-
-
