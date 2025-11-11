@@ -16,7 +16,6 @@ public class Database {
         }
     }
 
-    // Standard connection to the database
     static Connection get() throws SQLException {
         return DriverManager.getConnection(URL_WITH_DB, USER, PASSWORD);
     }
@@ -92,7 +91,6 @@ public class Database {
         }
     }
 
-    // Check if DB exists and create if missing
     private static void ensureDatabaseExists() {
         try (Connection c = DriverManager.getConnection(URL_NO_DB, USER, PASSWORD);
              Statement s = c.createStatement()) {
