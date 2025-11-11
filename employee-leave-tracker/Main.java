@@ -25,7 +25,6 @@ public class Main {
         }
     }
 
-    // ---------------- EMPLOYEE LOGIN ----------------
     static void employeeLogin() {
         System.out.print("Enter Employee ID: ");
         int empId = Integer.parseInt(sc.nextLine().trim());
@@ -42,6 +41,8 @@ public class Main {
                 String dbPass = rs.getString("password");
 
                 if (dbPass.equals(pass)) {
+                    sendUpcomingLeaveNotification(c, empId);
+                    sendLowBalanceNotification(c, empId);
                     System.out.println("\nWelcome, " + name);
                     employeeMenu(empId);
                 } else System.out.println("Invalid password.");
@@ -93,6 +94,18 @@ public class Main {
                     continue;
                 }
 
+                PreparedStatement chk = c.prepareStatement(
+                        "SELECT COUNT(*) FROM leaves WHERE emp_id=? AND status IN ('PENDING','APPROVED') AND (start_date <= ? AND end_date >= ?)");
+                chk.setInt(1, empId);
+                chk.setDate(2, Date.valueOf(end));
+                chk.setDate(3, Date.valueOf(start));
+                ResultSet overlap = chk.executeQuery();
+                overlap.next();
+                if (overlap.getInt(1) > 0) {
+                    System.out.println("You already have a leave request during this period.");
+                    continue;
+                }
+
                 long days = java.time.temporal.ChronoUnit.DAYS.between(start, end) + 1;
                 if (!hasEnoughBalance(c, empId, type, days)) {
                     System.out.println("Insufficient balance.");
@@ -140,7 +153,8 @@ public class Main {
 
     static void viewNotifications(int empId) {
         try (Connection c = Database.get();
-             PreparedStatement ps = c.prepareStatement("SELECT message, date FROM notifications WHERE emp_id=? ORDER BY date DESC")) {
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT message, date FROM notifications WHERE emp_id=? ORDER BY notif_id DESC")) {
             ps.setInt(1, empId);
             ResultSet rs = ps.executeQuery();
             System.out.println("\n--- Notifications ---");
@@ -189,7 +203,6 @@ public class Main {
         }
     }
 
-    // ---------------- HR LOGIN ----------------
     static void hrLogin() {
         System.out.print("Enter HR ID: ");
         int empId = Integer.parseInt(sc.nextLine().trim());
@@ -218,14 +231,16 @@ public class Main {
             System.out.println("1. Approve/Reject Leaves");
             System.out.println("2. Add New Employee");
             System.out.println("3. Remove Employee");
-            System.out.println("4. Logout / Exit");
+            System.out.println("4. Dashboard");
+            System.out.println("5. Logout / Exit");
             System.out.print("Choose: ");
             String ch = sc.nextLine().trim();
 
             if (ch.equals("1")) decide();
             else if (ch.equals("2")) addEmployee();
             else if (ch.equals("3")) removeEmployee();
-            else if (ch.equals("4")) break;
+            else if (ch.equals("4")) showDashboard();
+            else if (ch.equals("5")) break;
         }
     }
 
@@ -319,6 +334,102 @@ public class Main {
         } catch (Exception e) {
             System.out.println(e.getMessage());
         }
+    }
+
+    // ✅ UPDATED DEPARTMENT-WISE DASHBOARD
+    static void showDashboard() {
+        try (Connection c = Database.get()) {
+            System.out.println("\n--- HR Dashboard ---");
+
+            String total = "SELECT COUNT(*) FROM leaves";
+            String pending = "SELECT COUNT(*) FROM leaves WHERE status='PENDING'";
+            String approved = "SELECT COUNT(*) FROM leaves WHERE status='APPROVED'";
+            String rejected = "SELECT COUNT(*) FROM leaves WHERE status='REJECTED'";
+
+            System.out.printf("Total Requests: %d | Pending: %d | Approved: %d | Rejected: %d%n",
+                    getCount(c, total), getCount(c, pending), getCount(c, approved), getCount(c, rejected));
+
+            System.out.println("\n--- Department-wise Leave Requests ---\n");
+
+            PreparedStatement ps = c.prepareStatement("""
+                SELECT d.name AS dept,
+                       COUNT(l.leave_id) AS total,
+                       SUM(CASE WHEN l.status='APPROVED' THEN 1 ELSE 0 END) AS approved,
+                       SUM(CASE WHEN l.status='REJECTED' THEN 1 ELSE 0 END) AS rejected,
+                       SUM(CASE WHEN l.status='PENDING' THEN 1 ELSE 0 END) AS pending
+                FROM departments d
+                LEFT JOIN employees e ON d.dept_id = e.dept_id
+                LEFT JOIN leaves l ON e.emp_id = l.emp_id
+                GROUP BY d.name
+                ORDER BY d.name
+            """);
+
+            ResultSet rs = ps.executeQuery();
+            boolean any = false;
+            while (rs.next()) {
+                any = true;
+                String dept = rs.getString("dept");
+                int totalCount = rs.getInt("total");
+                int approvedCount = rs.getInt("approved");
+                int rejectedCount = rs.getInt("rejected");
+                int pendingCount = rs.getInt("pending");
+
+                System.out.printf("%-12s :  Total: %-3d | Approved: %-3d | Rejected: %-3d | Pending: %-3d%n",
+                        dept, totalCount, approvedCount, rejectedCount, pendingCount);
+            }
+            if (!any)
+                System.out.println("No department data available.");
+        } catch (Exception e) {
+            System.out.println("Error showing dashboard: " + e.getMessage());
+        }
+    }
+
+    static int getCount(Connection c, String query) throws SQLException {
+        try (Statement s = c.createStatement(); ResultSet r = s.executeQuery(query)) {
+            r.next();
+            return r.getInt(1);
+        }
+    }
+
+    static void sendUpcomingLeaveNotification(Connection c, int empId) {
+        try (PreparedStatement ps = c.prepareStatement(
+                "SELECT COUNT(*) FROM leaves WHERE emp_id=? AND status='APPROVED' AND start_date = CURRENT_DATE + INTERVAL 1 DAY")) {
+            ps.setInt(1, empId);
+            ResultSet rs = ps.executeQuery();
+            rs.next();
+            if (rs.getInt(1) > 0) {
+                PreparedStatement n = c.prepareStatement("INSERT INTO notifications(emp_id,message,date) VALUES (?,?,CURRENT_DATE)");
+                n.setInt(1, empId);
+                n.setString(2, "Reminder: Your approved leave starts tomorrow.");
+                n.executeUpdate();
+            }
+        } catch (Exception ignored) {}
+    }
+
+    static void sendLowBalanceNotification(Connection c, int empId) {
+        try (PreparedStatement ps = c.prepareStatement(
+                "SELECT casual,sick,earned,wfh FROM leave_balances WHERE emp_id=?")) {
+            ps.setInt(1, empId);
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) {
+                StringBuilder msg = new StringBuilder("Alert: Low balance in ");
+                boolean found = false;
+
+                if (rs.getInt("casual") < 2) { msg.append("Casual"); found = true; }
+                if (rs.getInt("sick") < 2) { if (found) msg.append(", "); msg.append("Sick"); found = true; }
+                if (rs.getInt("earned") < 2) { if (found) msg.append(", "); msg.append("Earned"); found = true; }
+                if (rs.getInt("wfh") < 2) { if (found) msg.append(", "); msg.append("WFH"); }
+
+                if (found) {
+                    msg.append(" leaves.");
+                    PreparedStatement n = c.prepareStatement(
+                            "INSERT INTO notifications(emp_id,message,date) VALUES (?,?,CURRENT_DATE)");
+                    n.setInt(1, empId);
+                    n.setString(2, msg.toString());
+                    n.executeUpdate();
+                }
+            }
+        } catch (Exception ignored) {}
     }
 
     static void addEmployee() {
