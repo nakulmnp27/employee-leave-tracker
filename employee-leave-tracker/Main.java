@@ -1,5 +1,6 @@
 import java.sql.*;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.Scanner;
 
 public class Main {
@@ -106,7 +107,7 @@ public class Main {
                     continue;
                 }
 
-                long days = java.time.temporal.ChronoUnit.DAYS.between(start, end) + 1;
+                long days = ChronoUnit.DAYS.between(start, end) + 1;
                 if (!hasEnoughBalance(c, empId, type, days)) {
                     System.out.println("Insufficient balance.");
                     continue;
@@ -186,16 +187,18 @@ public class Main {
 
     static void leaveHistory(int empId) {
         try (Connection c = Database.get();
-             PreparedStatement ps = c.prepareStatement("SELECT type,start_date,end_date,status,manager_remark FROM leaves WHERE emp_id=? ORDER BY start_date DESC")) {
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT type,start_date,end_date,status,manager_remark,reason FROM leaves WHERE emp_id=? ORDER BY start_date DESC")) {
             ps.setInt(1, empId);
             ResultSet rs = ps.executeQuery();
             System.out.println("\n--- Leave History ---");
             boolean any = false;
             while (rs.next()) {
                 any = true;
-                System.out.printf("%s | %s to %s | %s | %s%n",
+                System.out.printf("%s | %s to %s | %s | %s | Reason: %s%n",
                         rs.getString("type"), rs.getDate("start_date"), rs.getDate("end_date"),
-                        rs.getString("status"), rs.getString("manager_remark"));
+                        rs.getString("status"), rs.getString("manager_remark"),
+                        rs.getString("reason"));
             }
             if (!any) System.out.println("No leave history found.");
         } catch (Exception e) {
@@ -231,163 +234,338 @@ public class Main {
             System.out.println("1. Approve/Reject Leaves");
             System.out.println("2. Add New Employee");
             System.out.println("3. Remove Employee");
-            System.out.println("4. Dashboard");
-            System.out.println("5. Logout / Exit");
+            System.out.println("4. View Dashboard");
+            System.out.println("5. Reset Employee Leave Balance");
+            System.out.println("6. Download Dashboard Report (CSV)");
+            System.out.println("7. Download Employee Leave Reports (CSV)");
+            System.out.println("8. Logout");
             System.out.print("Choose: ");
             String ch = sc.nextLine().trim();
 
-            if (ch.equals("1")) decide();
+            if (ch.equals("1")) approveRejectLeaves();
             else if (ch.equals("2")) addEmployee();
             else if (ch.equals("3")) removeEmployee();
-            else if (ch.equals("4")) showDashboard();
-            else if (ch.equals("5")) break;
+            else if (ch.equals("4")) viewDashboard();
+            else if (ch.equals("5")) resetLeaveBalance();
+            else if (ch.equals("6")) exportDashboardCSV();
+            else if (ch.equals("7")) exportEmployeeLeaveCSV();
+            else if (ch.equals("8")) break;
         }
     }
 
-    static void decide() {
-        try (Connection c = Database.get()) {
-            try (PreparedStatement ps = c.prepareStatement("SELECT leave_id, emp_id, type, start_date, end_date FROM leaves WHERE status='PENDING'");
-                 ResultSet rs = ps.executeQuery()) {
-                System.out.println("\nPending Requests:");
-                boolean any = false;
-                while (rs.next()) {
-                    any = true;
-                    System.out.printf("%d | Emp %d | %s | %s to %s%n",
-                            rs.getInt("leave_id"), rs.getInt("emp_id"),
-                            rs.getString("type"), rs.getDate("start_date"), rs.getDate("end_date"));
-                }
-                if (!any) {
-                    System.out.println("No pending requests.");
-                    return;
-                }
-            }
-
-            System.out.print("Enter leave_id to decide: ");
-            int leaveId = Integer.parseInt(sc.nextLine().trim());
-            int empId = -1;
-
-            try (PreparedStatement ps2 = c.prepareStatement("SELECT emp_id FROM leaves WHERE leave_id=?")) {
-                ps2.setInt(1, leaveId);
-                ResultSet r2 = ps2.executeQuery();
-                if (r2.next()) empId = r2.getInt("emp_id");
-            }
-
-            if (empId == -1) {
-                System.out.println("Invalid leave ID.");
-                return;
-            }
-
-            viewBalance(empId);
-            leaveHistory(empId);
-
-            System.out.print("\nDecision (APPROVED/REJECTED): ");
-            String decision = sc.nextLine().trim().toUpperCase();
-            if (!decision.equals("APPROVED") && !decision.equals("REJECTED")) {
-                System.out.println("Invalid input.");
-                return;
-            }
-
-            System.out.print("Manager remark: ");
-            String remark = sc.nextLine().trim();
-
-            c.setAutoCommit(false);
-            try (PreparedStatement upd = c.prepareStatement("UPDATE leaves SET status=?, manager_remark=? WHERE leave_id=?")) {
-                upd.setString(1, decision);
-                upd.setString(2, remark);
-                upd.setInt(3, leaveId);
-                upd.executeUpdate();
-            }
-
-            if (decision.equals("APPROVED")) {
-                try (PreparedStatement ps2 = c.prepareStatement("SELECT type,start_date,end_date FROM leaves WHERE leave_id=?")) {
-                    ps2.setInt(1, leaveId);
-                    ResultSet r2 = ps2.executeQuery();
-                    if (r2.next()) {
-                        String type = r2.getString("type");
-                        LocalDate s = r2.getDate("start_date").toLocalDate();
-                        LocalDate e = r2.getDate("end_date").toLocalDate();
-                        long days = java.time.temporal.ChronoUnit.DAYS.between(s, e) + 1;
-                        String col = switch (type) {
-                            case "CASUAL" -> "casual";
-                            case "SICK" -> "sick";
-                            case "EARNED" -> "earned";
-                            default -> "wfh";
-                        };
-                        try (PreparedStatement dec = c.prepareStatement("UPDATE leave_balances SET " + col + " = " + col + " - ? WHERE emp_id=?")) {
-                            dec.setLong(1, days);
-                            dec.setInt(2, empId);
-                            dec.executeUpdate();
-                        }
-                    }
-                }
-            }
-
-            try (PreparedStatement notif = c.prepareStatement("INSERT INTO notifications(emp_id,message,date) VALUES (?,?,CURRENT_DATE)")) {
-                notif.setInt(1, empId);
-                notif.setString(2, "Leave " + decision.toLowerCase());
-                notif.executeUpdate();
-            }
-
-            c.commit();
-            c.setAutoCommit(true);
-            System.out.println("Decision saved successfully.");
-        } catch (Exception e) {
-            System.out.println(e.getMessage());
-        }
-    }
-
-    // ✅ UPDATED DEPARTMENT-WISE DASHBOARD
-    static void showDashboard() {
-        try (Connection c = Database.get()) {
-            System.out.println("\n--- HR Dashboard ---");
-
-            String total = "SELECT COUNT(*) FROM leaves";
-            String pending = "SELECT COUNT(*) FROM leaves WHERE status='PENDING'";
-            String approved = "SELECT COUNT(*) FROM leaves WHERE status='APPROVED'";
-            String rejected = "SELECT COUNT(*) FROM leaves WHERE status='REJECTED'";
-
-            System.out.printf("Total Requests: %d | Pending: %d | Approved: %d | Rejected: %d%n",
-                    getCount(c, total), getCount(c, pending), getCount(c, approved), getCount(c, rejected));
-
-            System.out.println("\n--- Department-wise Leave Requests ---\n");
-
-            PreparedStatement ps = c.prepareStatement("""
-                SELECT d.name AS dept,
-                       COUNT(l.leave_id) AS total,
-                       SUM(CASE WHEN l.status='APPROVED' THEN 1 ELSE 0 END) AS approved,
-                       SUM(CASE WHEN l.status='REJECTED' THEN 1 ELSE 0 END) AS rejected,
-                       SUM(CASE WHEN l.status='PENDING' THEN 1 ELSE 0 END) AS pending
-                FROM departments d
-                LEFT JOIN employees e ON d.dept_id = e.dept_id
-                LEFT JOIN leaves l ON e.emp_id = l.emp_id
-                GROUP BY d.name
-                ORDER BY d.name
-            """);
-
+    static void approveRejectLeaves() {
+        try (Connection c = Database.get();
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT l.leave_id, e.name, l.emp_id, l.type, l.start_date, l.end_date, l.reason " +
+                             "FROM leaves l JOIN employees e ON l.emp_id = e.emp_id WHERE l.status='PENDING'")) {
             ResultSet rs = ps.executeQuery();
             boolean any = false;
             while (rs.next()) {
                 any = true;
-                String dept = rs.getString("dept");
-                int totalCount = rs.getInt("total");
-                int approvedCount = rs.getInt("approved");
-                int rejectedCount = rs.getInt("rejected");
-                int pendingCount = rs.getInt("pending");
+                int leaveId = rs.getInt("leave_id");
+                int empId = rs.getInt("emp_id");
+                String empName = rs.getString("name");
+                String type = rs.getString("type");
+                LocalDate start = rs.getDate("start_date").toLocalDate();
+                LocalDate end = rs.getDate("end_date").toLocalDate();
+                String reason = rs.getString("reason");
 
-                System.out.printf("%-12s :  Total: %-3d | Approved: %-3d | Rejected: %-3d | Pending: %-3d%n",
-                        dept, totalCount, approvedCount, rejectedCount, pendingCount);
+                long days = ChronoUnit.DAYS.between(start, end) + 1;
+                System.out.printf("\nLeave ID: %d | Employee: %s (ID %d)\nType: %s | %s to %s | Days: %d\nReason: %s\n",
+                        leaveId, empName, empId, type, start, end, days, reason);
+                System.out.print("Approve (A) / Reject (R) / Skip (S): ");
+                String choice = sc.nextLine().trim().toUpperCase();
+
+                if (choice.equals("A") || choice.equals("R")) {
+                    System.out.print("Remark: ");
+                    String remark = sc.nextLine().trim();
+                    String status = choice.equals("A") ? "APPROVED" : "REJECTED";
+
+                    PreparedStatement upd = c.prepareStatement(
+                            "UPDATE leaves SET status=?, manager_remark=? WHERE leave_id=?");
+                    upd.setString(1, status);
+                    upd.setString(2, remark);
+                    upd.setInt(3, leaveId);
+                    upd.executeUpdate();
+
+                    if (status.equals("APPROVED")) {
+                        PreparedStatement bal = c.prepareStatement(
+                                "UPDATE leave_balances SET " + type.toLowerCase() + " = " + type.toLowerCase() + " - ? WHERE emp_id=?");
+                        bal.setLong(1, days);
+                        bal.setInt(2, empId);
+                        bal.executeUpdate();
+                    }
+
+                    PreparedStatement notif = c.prepareStatement(
+                            "INSERT INTO notifications(emp_id,message,date) VALUES (?,?,CURRENT_DATE)");
+                    notif.setInt(1, empId);
+                    notif.setString(2, "Your " + type + " leave from " + start + " to " + end + " has been " + status.toLowerCase() + ".");
+                    notif.executeUpdate();
+
+                    System.out.println("Leave " + status.toLowerCase() + " successfully for " + empName + ".");
+                }
             }
-            if (!any)
-                System.out.println("No department data available.");
+            if (!any) System.out.println("No pending leaves found.");
         } catch (Exception e) {
-            System.out.println("Error showing dashboard: " + e.getMessage());
+            System.out.println("Error approving/rejecting leaves: " + e.getMessage());
         }
     }
 
-    static int getCount(Connection c, String query) throws SQLException {
-        try (Statement s = c.createStatement(); ResultSet r = s.executeQuery(query)) {
+    static void addEmployee() {
+        try (Connection c = Database.get()) {
+            PreparedStatement maxId = c.prepareStatement("SELECT IFNULL(MAX(emp_id),1000) FROM employees WHERE role='EMP'");
+            ResultSet r = maxId.executeQuery();
             r.next();
-            return r.getInt(1);
+            int newId = r.getInt(1) + 1;
+
+            System.out.println("\nAssigning Employee ID: " + newId);
+            System.out.print("Name: ");
+            String name = sc.nextLine().trim();
+            System.out.print("Password: ");
+            String password = sc.nextLine().trim();
+
+            System.out.println("\nSelect Department:");
+            PreparedStatement deptList = c.prepareStatement("SELECT dept_id, name FROM departments");
+            ResultSet ds = deptList.executeQuery();
+            while (ds.next()) {
+                System.out.println(ds.getInt("dept_id") + ". " + ds.getString("name"));
+            }
+            System.out.print("Enter Department ID: ");
+            int deptId = Integer.parseInt(sc.nextLine().trim());
+
+            PreparedStatement ps = c.prepareStatement(
+                    "INSERT INTO employees(emp_id,name,password,role,dept_id) VALUES (?,?,?,?,?)");
+            ps.setInt(1, newId);
+            ps.setString(2, name);
+            ps.setString(3, password);
+            ps.setString(4, "EMP");
+            ps.setInt(5, deptId);
+            ps.executeUpdate();
+
+            System.out.println("Set initial leave balances:");
+            System.out.print("Casual: ");
+            int casual = Integer.parseInt(sc.nextLine().trim());
+            System.out.print("Sick: ");
+            int sick = Integer.parseInt(sc.nextLine().trim());
+            System.out.print("Earned: ");
+            int earned = Integer.parseInt(sc.nextLine().trim());
+            System.out.print("WFH: ");
+            int wfh = Integer.parseInt(sc.nextLine().trim());
+
+            PreparedStatement lb = c.prepareStatement(
+                    "INSERT INTO leave_balances(emp_id,casual,sick,earned,wfh) VALUES (?,?,?,?,?)");
+            lb.setInt(1, newId);
+            lb.setInt(2, casual);
+            lb.setInt(3, sick);
+            lb.setInt(4, earned);
+            lb.setInt(5, wfh);
+            lb.executeUpdate();
+
+            System.out.println("Employee added successfully with ID: " + newId);
+        } catch (Exception e) {
+            System.out.println("Error adding employee: " + e.getMessage());
+        }
+    }
+
+    static void removeEmployee() {
+        try (Connection c = Database.get()) {
+            System.out.print("Employee ID to remove: ");
+            int empId = Integer.parseInt(sc.nextLine().trim());
+
+            PreparedStatement chk = c.prepareStatement("SELECT role FROM employees WHERE emp_id=? AND role='EMP'");
+            chk.setInt(1, empId);
+            ResultSet rs = chk.executeQuery();
+            if (!rs.next()) {
+                System.out.println("Employee not found or not an EMP role.");
+                return;
+            }
+
+            PreparedStatement delNotif = c.prepareStatement("DELETE FROM notifications WHERE emp_id=?");
+            delNotif.setInt(1, empId);
+            delNotif.executeUpdate();
+
+            PreparedStatement delLeaves = c.prepareStatement("DELETE FROM leaves WHERE emp_id=?");
+            delLeaves.setInt(1, empId);
+            delLeaves.executeUpdate();
+
+            PreparedStatement delLB = c.prepareStatement("DELETE FROM leave_balances WHERE emp_id=?");
+            delLB.setInt(1, empId);
+            delLB.executeUpdate();
+
+            PreparedStatement delEmp = c.prepareStatement("DELETE FROM employees WHERE emp_id=?");
+            delEmp.setInt(1, empId);
+            delEmp.executeUpdate();
+
+            System.out.println("Employee removed successfully.");
+        } catch (Exception e) {
+            System.out.println("Error removing employee: " + e.getMessage());
+        }
+    }
+
+    static void resetLeaveBalance() {
+        try (Connection c = Database.get()) {
+            System.out.print("Enter Employee ID to reset: ");
+            int empId = Integer.parseInt(sc.nextLine().trim());
+
+            PreparedStatement check = c.prepareStatement("SELECT * FROM leave_balances WHERE emp_id=?");
+            check.setInt(1, empId);
+            ResultSet rs = check.executeQuery();
+
+            if (!rs.next()) {
+                System.out.println("Employee not found or leave balance not set.");
+                return;
+            }
+
+            System.out.print("Set Casual leaves: ");
+            int casual = Integer.parseInt(sc.nextLine().trim());
+            System.out.print("Set Sick leaves: ");
+            int sick = Integer.parseInt(sc.nextLine().trim());
+            System.out.print("Set Earned leaves: ");
+            int earned = Integer.parseInt(sc.nextLine().trim());
+            System.out.print("Set WFH leaves: ");
+            int wfh = Integer.parseInt(sc.nextLine().trim());
+
+            PreparedStatement ps = c.prepareStatement(
+                    "UPDATE leave_balances SET casual=?, sick=?, earned=?, wfh=? WHERE emp_id=?");
+            ps.setInt(1, casual);
+            ps.setInt(2, sick);
+            ps.setInt(3, earned);
+            ps.setInt(4, wfh);
+            ps.setInt(5, empId);
+            ps.executeUpdate();
+
+            PreparedStatement notif = c.prepareStatement(
+                    "INSERT INTO notifications(emp_id,message,date) VALUES (?,?,CURRENT_DATE)");
+            notif.setInt(1, empId);
+            notif.setString(2, "HR has reset your leave balances.");
+            notif.executeUpdate();
+
+            System.out.println("Leave balances reset successfully for Employee ID " + empId);
+        } catch (Exception e) {
+            System.out.println("Error resetting leave balance: " + e.getMessage());
+        }
+    }
+
+    static void viewDashboard() {
+        try (Connection c = Database.get()) {
+            System.out.println("\n--- HR Dashboard ---");
+
+            PreparedStatement totalEmp = c.prepareStatement("SELECT COUNT(*) FROM employees WHERE role='EMP'");
+            ResultSet e = totalEmp.executeQuery();
+            e.next();
+            System.out.println("Total Employees: " + e.getInt(1));
+
+            PreparedStatement totalLeaves = c.prepareStatement("SELECT COUNT(*) FROM leaves");
+            ResultSet t = totalLeaves.executeQuery();
+            t.next();
+            System.out.println("Total Leave Requests: " + t.getInt(1));
+
+            System.out.println("\n--- Department-wise Leave Summary ---");
+            PreparedStatement dept = c.prepareStatement(
+                    "SELECT d.name AS department, " +
+                            "SUM(CASE WHEN l.status='PENDING' THEN 1 ELSE 0 END) AS pending, " +
+                            "SUM(CASE WHEN l.status='APPROVED' THEN 1 ELSE 0 END) AS approved, " +
+                            "SUM(CASE WHEN l.status='REJECTED' THEN 1 ELSE 0 END) AS rejected " +
+                            "FROM departments d " +
+                            "LEFT JOIN employees e ON d.dept_id = e.dept_id " +
+                            "LEFT JOIN leaves l ON e.emp_id = l.emp_id " +
+                            "GROUP BY d.dept_id");
+            ResultSet d = dept.executeQuery();
+            boolean any = false;
+            while (d.next()) {
+                any = true;
+                String dep = d.getString("department");
+                int pending = d.getInt("pending");
+                int approved = d.getInt("approved");
+                int rejected = d.getInt("rejected");
+                System.out.printf("%s - Pending: %d | Approved: %d | Rejected: %d%n",
+                        dep, pending, approved, rejected);
+            }
+            if (!any) System.out.println("No department data available.");
+
+        } catch (Exception e) {
+            System.out.println("Error loading dashboard: " + e.getMessage());
+        }
+    }
+
+    static void exportDashboardCSV() {
+        String fileName = "HR_Dashboard_Report.csv";
+
+        try (Connection c = Database.get();
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT d.name AS department, " +
+                             "SUM(CASE WHEN l.status='PENDING' THEN 1 ELSE 0 END) AS pending, " +
+                             "SUM(CASE WHEN l.status='APPROVED' THEN 1 ELSE 0 END) AS approved, " +
+                             "SUM(CASE WHEN l.status='REJECTED' THEN 1 ELSE 0 END) AS rejected " +
+                             "FROM departments d " +
+                             "LEFT JOIN employees e ON d.dept_id = e.dept_id " +
+                             "LEFT JOIN leaves l ON e.emp_id = l.emp_id " +
+                             "GROUP BY d.dept_id");
+             ResultSet rs = ps.executeQuery()) {
+
+            java.io.FileWriter fw = new java.io.FileWriter(fileName);
+            fw.write("Department,Pending,Approved,Rejected\n");
+
+            boolean any = false;
+            while (rs.next()) {
+                any = true;
+                fw.write(String.format("%s,%d,%d,%d\n",
+                        rs.getString("department"),
+                        rs.getInt("pending"),
+                        rs.getInt("approved"),
+                        rs.getInt("rejected")));
+            }
+
+            fw.close();
+            if (any)
+                System.out.println("CSV report generated successfully: " + fileName);
+            else
+                System.out.println("No data available to export.");
+
+        } catch (Exception e) {
+            System.out.println("Error exporting CSV: " + e.getMessage());
+        }
+    }
+
+    static void exportEmployeeLeaveCSV() {
+        String fileName = "Employee_Leave_Report.csv";
+
+        try (Connection c = Database.get();
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT e.emp_id, e.name, d.name AS department, " +
+                             "l.type, l.start_date, l.end_date, l.status, l.manager_remark, l.reason " +
+                             "FROM employees e " +
+                             "LEFT JOIN departments d ON e.dept_id = d.dept_id " +
+                             "LEFT JOIN leaves l ON e.emp_id = l.emp_id " +
+                             "WHERE e.role='EMP' ORDER BY e.emp_id, l.start_date");
+             ResultSet rs = ps.executeQuery()) {
+
+            java.io.FileWriter fw = new java.io.FileWriter(fileName);
+            fw.write("Emp_ID,Name,Department,Type,Start_Date,End_Date,Status,Manager_Remark,Reason\n");
+
+            boolean any = false;
+            while (rs.next()) {
+                any = true;
+                fw.write(String.format("%d,%s,%s,%s,%s,%s,%s,%s,%s\n",
+                        rs.getInt("emp_id"),
+                        rs.getString("name"),
+                        rs.getString("department"),
+                        rs.getString("type"),
+                        rs.getDate("start_date"),
+                        rs.getDate("end_date"),
+                        rs.getString("status"),
+                        rs.getString("manager_remark") != null ? rs.getString("manager_remark") : "",
+                        rs.getString("reason") != null ? rs.getString("reason").replace(",", ";") : ""));
+            }
+
+            fw.close();
+            if (any)
+                System.out.println("Employee leave report exported successfully: " + fileName);
+            else
+                System.out.println("No leave data found.");
+
+        } catch (Exception e) {
+            System.out.println("Error exporting employee leave report: " + e.getMessage());
         }
     }
 
@@ -398,7 +576,8 @@ public class Main {
             ResultSet rs = ps.executeQuery();
             rs.next();
             if (rs.getInt(1) > 0) {
-                PreparedStatement n = c.prepareStatement("INSERT INTO notifications(emp_id,message,date) VALUES (?,?,CURRENT_DATE)");
+                PreparedStatement n = c.prepareStatement(
+                        "INSERT INTO notifications(emp_id,message,date) VALUES (?,?,CURRENT_DATE)");
                 n.setInt(1, empId);
                 n.setString(2, "Reminder: Your approved leave starts tomorrow.");
                 n.executeUpdate();
@@ -430,70 +609,5 @@ public class Main {
                 }
             }
         } catch (Exception ignored) {}
-    }
-
-    static void addEmployee() {
-        try (Connection c = Database.get()) {
-            int nextId = 101;
-            try (PreparedStatement ps = c.prepareStatement("SELECT MAX(emp_id) FROM employees WHERE role='EMP'")) {
-                ResultSet rs = ps.executeQuery();
-                if (rs.next() && rs.getInt(1) > 0) nextId = rs.getInt(1) + 1;
-            }
-
-            System.out.println("New Employee ID: " + nextId);
-            System.out.print("Name: ");
-            String name = sc.nextLine().trim();
-
-            System.out.println("Choose Department:");
-            System.out.println("1. R&D");
-            System.out.println("2. Development");
-            System.out.println("3. Testing");
-            System.out.print("Select: ");
-            int deptChoice = Integer.parseInt(sc.nextLine().trim());
-            int deptId = (deptChoice >= 1 && deptChoice <= 3) ? deptChoice : 1;
-
-            System.out.print("Set password for employee: ");
-            String empPass = sc.nextLine().trim();
-
-            PreparedStatement ps = c.prepareStatement(
-                    "INSERT INTO employees(emp_id,name,dept_id,role,password) VALUES (?,?,?,?,?)");
-            ps.setInt(1, nextId);
-            ps.setString(2, name);
-            ps.setInt(3, deptId);
-            ps.setString(4, "EMP");
-            ps.setString(5, empPass);
-            ps.executeUpdate();
-
-            PreparedStatement bal = c.prepareStatement(
-                    "INSERT INTO leave_balances(emp_id,casual,sick,earned,wfh) VALUES (?,?,?,?,?)");
-            bal.setInt(1, nextId);
-            bal.setInt(2, 5);
-            bal.setInt(3, 5);
-            bal.setInt(4, 10);
-            bal.setInt(5, 10);
-            bal.executeUpdate();
-
-            System.out.println("New employee added successfully. ID: " + nextId);
-        } catch (Exception e) {
-            System.out.println("Error adding employee: " + e.getMessage());
-        }
-    }
-
-    static void removeEmployee() {
-        try (Connection c = Database.get()) {
-            System.out.print("Enter Employee ID to remove: ");
-            int id = Integer.parseInt(sc.nextLine().trim());
-
-            PreparedStatement delEmp = c.prepareStatement("DELETE FROM employees WHERE emp_id=? AND role='EMP'");
-            delEmp.setInt(1, id);
-            int rows = delEmp.executeUpdate();
-
-            if (rows > 0)
-                System.out.println("Employee removed successfully.");
-            else
-                System.out.println("Employee ID not found or cannot remove HR accounts.");
-        } catch (Exception e) {
-            System.out.println("Error removing employee: " + e.getMessage());
-        }
     }
 }
