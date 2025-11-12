@@ -105,7 +105,6 @@ public class Database {
             System.out.println("Error ensuring database exists: " + e.getMessage());
         }
     }
-
     private static void seedData(Connection c) {
         try (Statement s = c.createStatement()) {
             s.executeUpdate("INSERT IGNORE INTO departments(dept_id,name) VALUES (1,'R&D'),(2,'Development'),(3,'Testing')");
